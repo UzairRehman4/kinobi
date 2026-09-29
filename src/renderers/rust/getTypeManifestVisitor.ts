@@ -19,6 +19,13 @@ export type RustTypeManifest = {
   type: string;
   imports: RustImportMap;
   nestedStructs: string[];
+  /**
+   * Whether this type contains an `f32`/`f64` field anywhere in its direct
+   * structure (through structs, tuples, arrays, options, maps and sets).
+   * `f32`/`f64` don't implement `Eq`, so a type - or anything that embeds it
+   * inline - can't derive `Eq` without failing to compile.
+   */
+  hasFloat?: boolean;
 };
 
 export function getTypeManifestVisitor() {
@@ -51,10 +58,18 @@ export function getTypeManifestVisitor() {
             'borsh::BorshDeserialize',
           ]);
           parentName = null;
+          const accountTraits = [
+            'BorshSerialize',
+            'BorshDeserialize',
+            'Clone',
+            'Debug',
+            ...(manifest.hasFloat ? [] : ['Eq']),
+            'PartialEq',
+          ];
           return {
             ...manifest,
             type:
-              '#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, Eq, PartialEq)]\n' +
+              `#[derive(${accountTraits.join(', ')})]\n` +
               '#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]\n' +
               `${manifest.type}`,
           };
@@ -73,7 +88,9 @@ export function getTypeManifestVisitor() {
             'BorshDeserialize',
             'Clone',
             'Debug',
-            'Eq',
+            // f32/f64 don't implement Eq, so a type that contains one
+            // anywhere in its direct structure can't derive it either.
+            ...(manifest.hasFloat ? [] : ['Eq']),
             'PartialEq',
           ];
           if (
@@ -412,6 +429,8 @@ export function getTypeManifestVisitor() {
               type: numberType.format,
               imports: new RustImportMap(),
               nestedStructs: [],
+              hasFloat:
+                numberType.format === 'f32' || numberType.format === 'f64',
             };
           }
 
@@ -507,11 +526,12 @@ export function getTypeManifestVisitor() {
 
 function mergeManifests(
   manifests: RustTypeManifest[]
-): Pick<RustTypeManifest, 'imports' | 'nestedStructs'> {
+): Pick<RustTypeManifest, 'imports' | 'nestedStructs' | 'hasFloat'> {
   return {
     imports: new RustImportMap().mergeWith(
       ...manifests.map((td) => td.imports)
     ),
     nestedStructs: manifests.flatMap((m) => m.nestedStructs),
+    hasFloat: manifests.some((m) => m.hasFloat),
   };
 }
